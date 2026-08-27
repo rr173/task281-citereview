@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"time"
 
 	"task281-citereview/internal/model"
 )
@@ -13,10 +12,17 @@ import (
 //  1. 拒绝自引（citing == cited）；
 //  2. 拒绝同一对段落重复引证；
 //  3. 拒绝会构成引证环的边（cited 经既有边可达 citing）。
+//
+// 上述不变量均为"先检测再写入"的批次内约束：若不串行化，并发建边会同时通过检测
+// 再各自 INSERT，导致重复对与引证环。故整个"重复检测 + 环检测 + 写入"必须在
+// 该批次的互斥锁内原子完成。
 func (s *Store) CreateEdge(ctx context.Context, edge *model.CitationEdge) (*model.CitationEdge, error) {
 	if edge.CitingSegmentID == edge.CitedSegmentID {
 		return nil, model.ErrSelfCitation
 	}
+	mu := s.edgeMutex(edge.BatchID)
+	mu.Lock()
+	defer mu.Unlock()
 	// 重复对检测
 	var dup int
 	if err := s.DB.QueryRowContext(ctx,
@@ -36,7 +42,6 @@ func (s *Store) CreateEdge(ctx context.Context, edge *model.CitationEdge) (*mode
 	if reachable {
 		return nil, model.ErrCitationCycle
 	}
-	time.Sleep(5 * time.Millisecond)
 	now := Now()
 	res, err := s.DB.ExecContext(ctx,
 		`INSERT INTO citation_edge (batch_id, citing_segment_id, cited_segment_id, relation, status, created_at, updated_at)

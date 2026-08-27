@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -11,6 +12,10 @@ import (
 // Store 持有数据库连接，提供全部持久化能力。所有 store 子文件的方法均挂在 *Store 上。
 type Store struct {
 	DB *sql.DB
+	// edgeMu 按批次序列化引证建边。引证图的不变量（拒绝重复对、拒绝成环）均为
+	// 批次内约束，且 reachable/dup 检测与 INSERT 之间必须原子：否则并发建边会
+	// 同时通过检测再各自写入，造成重复边与引证环。key 为 batchID，值为 *sync.Mutex。
+	edgeMu sync.Map
 }
 
 // Open 打开（必要时创建）SQLite 数据库并建立全部表结构。
@@ -35,6 +40,14 @@ func Open(path string) (*Store, error) {
 // Close 关闭数据库连接。
 func (s *Store) Close() error {
 	return s.DB.Close()
+}
+
+// edgeMutex 返回某批次专属的引证建边互斥锁（不存在则创建）。
+// 引证不变量（重复对、成环）均为批次内约束，故按 batchID 加锁即可；
+// 不同批次并发建边互不阻塞。
+func (s *Store) edgeMutex(batchID int64) *sync.Mutex {
+	v, _ := s.edgeMu.LoadOrStore(batchID, &sync.Mutex{})
+	return v.(*sync.Mutex)
 }
 
 // Now 返回当前 Unix 毫秒时间戳，作为全表统一时间口径。
