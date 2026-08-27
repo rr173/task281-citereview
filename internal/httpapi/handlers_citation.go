@@ -30,7 +30,9 @@ func (s *Server) createCitation(w http.ResponseWriter, r *http.Request) {
 		Relation:        body.Relation,
 	})
 	if err != nil {
-		writeError(w, statusForError(fmt.Errorf("create citation: %v", err)), fmt.Errorf("create citation: %v", err))
+		// 注意：statusForError 必须接收原始 err，否则经 fmt.Errorf 包裹后
+		// 哨兵错误（自引/环/重复）的身份会被切断，误降级为 400。
+		writeError(w, statusForError(err), fmt.Errorf("create citation: %w", err))
 		return
 	}
 	writeJSON(w, http.StatusCreated, edge)
