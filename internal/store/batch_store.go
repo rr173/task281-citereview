@@ -64,7 +64,7 @@ func (s *Store) SetBatchStatus(ctx context.Context, id int64, to model.BatchStat
 		return err
 	}
 	if !model.ValidBatchTransition(b.Status, to) {
-		return fmt.Errorf("invalid transition: %v", model.ErrInvalidTransition)
+		return fmt.Errorf("%w: %s -> %s", model.ErrInvalidTransition, b.Status, to)
 	}
 	if _, err := s.DB.ExecContext(ctx,
 		`UPDATE research_batch SET status = ?, updated_at = ? WHERE id = ?`, to, Now(), id); err != nil {

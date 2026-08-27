@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -42,17 +43,28 @@ func parseID(r *http.Request, name string) (int64, error) {
 }
 
 // statusForError 将领域错误映射为 HTTP 状态码。
+// 使用 errors.Is 而非直接比较，确保被 fmt.Errorf("%w", ...) 包装的哨兵错误
+// 也能正确映射（例如非法状态流转返回 409 而非 400）。
 func statusForError(err error) int {
-	switch err {
-	case model.ErrBatchNotFound, model.ErrSegmentNotFound, model.ErrEdgeNotFound,
-		model.ErrDecisionNotFound, model.ErrVersionNotFound:
-		return http.StatusNotFound
-	case model.ErrSelfCitation, model.ErrCitationCycle, model.ErrDuplicateEdge,
+	notFound := []error{
+		model.ErrBatchNotFound, model.ErrSegmentNotFound, model.ErrEdgeNotFound,
+		model.ErrDecisionNotFound, model.ErrVersionNotFound,
+	}
+	for _, e := range notFound {
+		if errors.Is(err, e) {
+			return http.StatusNotFound
+		}
+	}
+	conflict := []error{
+		model.ErrSelfCitation, model.ErrCitationCycle, model.ErrDuplicateEdge,
 		model.ErrFrozenImmutable, model.ErrVersionMismatch, model.ErrElementMissing,
 		model.ErrLimitationConflict, model.ErrDuplicateLimitation, model.ErrInvalidTransition,
-		model.ErrDuplicateSummary:
-		return http.StatusConflict
-	default:
-		return http.StatusBadRequest
+		model.ErrDuplicateSummary,
 	}
+	for _, e := range conflict {
+		if errors.Is(err, e) {
+			return http.StatusConflict
+		}
+	}
+	return http.StatusBadRequest
 }
