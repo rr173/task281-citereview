@@ -85,3 +85,44 @@ func (s *Store) HasLimitationType(ctx context.Context, segmentID int64, lt model
 	}
 	return n > 0, nil
 }
+
+// ReplaceLimitations 原子地重建某判决段的限制语：先清空该段既有限制语，再批量插入新集合。
+// 该操作在段级互斥锁保护下、于单一数据库事务内完成：
+//   - 段级锁串行化对同一段的并发解析，避免"清空/插入"交错导致条数错乱或重复；
+//   - 事务保证清空与插入要么整体提交、要么整体回滚，并发读取方永远不会撞见
+//     "已清空尚未插入"的中间空列表。
+// 传入空切片等价于清空该段全部限制语。
+func (s *Store) ReplaceLimitations(ctx context.Context, segmentID int64, lims []*model.LimitationClause) error {
+	mu := s.LockSegment(segmentID)
+	mu.Lock()
+	defer mu.Unlock()
+
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM limitation_clause WHERE segment_id = ?`, segmentID); err != nil {
+		return fmt.Errorf("clear limitations: %w", err)
+	}
+	if len(lims) > 0 {
+		stmt, err := tx.PrepareContext(ctx,
+			`INSERT INTO limitation_clause (segment_id, batch_id, ltype, text, created_at) VALUES (?, ?, ?, ?, ?)`)
+		if err != nil {
+			return fmt.Errorf("prepare insert limitation: %w", err)
+		}
+		defer stmt.Close()
+		now := Now()
+		for _, lim := range lims {
+			if _, err := stmt.ExecContext(ctx, segmentID, lim.BatchID, string(lim.LType), lim.Text, now); err != nil {
+				return fmt.Errorf("insert limitation: %w", err)
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit replace limitations: %w", err)
+	}
+	return nil
+}

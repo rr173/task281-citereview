@@ -49,19 +49,20 @@ func splitSentences(text string) []string {
 //   - 命中某类型肯定式限定词的句子，归入该类型；
 //   - 同类型内同时出现肯定式与否定式（排除词）→ 视为限制语冲突，整体拒绝并回滚；
 //   - 同类型内文本完全相同的限制语去重。
+//
+// 并发安全：对同一段的解析以段级互斥锁串行化，且"清空+插入"在单一事务内完成，
+// 因此无论多少并发解析同时命中同一段，完成后该段限制语条数始终稳定一致，
+// 并发读取也不会撞见"已清空尚未插入"的中间空列表。
 func (s *Service) ParseLimitations(ctx context.Context, segmentID int64) ([]*model.LimitationClause, error) {
 	seg, err := s.Store.GetSegment(ctx, segmentID)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.clearLimitations(ctx, segmentID); err != nil {
-		return nil, err
-	}
-	time.Sleep(5 * time.Millisecond)
 	sentences := splitSentences(seg.Text)
 	type pending struct {
 		ltype     model.LimitationType
 		text      string
+		inclusive bool
 		exclusive bool
 	}
 	groups := map[model.LimitationType][]pending{}
@@ -70,7 +71,7 @@ func (s *Service) ParseLimitations(ctx context.Context, segmentID int64) ([]*mod
 			inclusive := containsAny(sent, rule.Inclusive)
 			exclusive := containsAny(sent, rule.Exclusive)
 			if inclusive || exclusive {
-				groups[rule.Type] = append(groups[rule.Type], pending{rule.Type, sent, exclusive})
+				groups[rule.Type] = append(groups[rule.Type], pending{rule.Type, sent, inclusive, exclusive})
 				break
 			}
 		}
@@ -81,7 +82,8 @@ func (s *Service) ParseLimitations(ctx context.Context, segmentID int64) ([]*mod
 		for _, it := range items {
 			if it.exclusive {
 				hasExc = true
-			} else {
+			}
+			if it.inclusive {
 				hasInc = true
 			}
 		}
@@ -89,28 +91,27 @@ func (s *Service) ParseLimitations(ctx context.Context, segmentID int64) ([]*mod
 			return nil, model.ErrLimitationConflict
 		}
 	}
-	var out []*model.LimitationClause
+	// 组装待写入限制语（去重），与段锁、事务解耦
 	seen := map[string]bool{}
+	var pendingCreate []*model.LimitationClause
 	for _, items := range groups {
 		for _, it := range items {
 			if seen[it.text] {
 				continue
 			}
 			seen[it.text] = true
-			lim := &model.LimitationClause{
+			pendingCreate = append(pendingCreate, &model.LimitationClause{
 				SegmentID: segmentID,
 				BatchID:   seg.BatchID,
 				LType:     it.ltype,
 				Text:      it.text,
-			}
-			created, err := s.Store.CreateLimitation(ctx, lim)
-			if err != nil {
-				return nil, fmt.Errorf("create limitation: %w", err)
-			}
-			out = append(out, created)
+			})
 		}
 	}
-	return out, nil
+	if err := s.Store.ReplaceLimitations(ctx, segmentID, pendingCreate); err != nil {
+		return nil, fmt.Errorf("replace limitations: %w", err)
+	}
+	return s.Store.ListLimitations(ctx, segmentID)
 }
 
 // CheckScope 比较一条引证关系双方的适用范围：
@@ -216,12 +217,4 @@ func containsAny(s string, subs []string) bool {
 		}
 	}
 	return false
-}
-
-func (s *Service) clearLimitations(ctx context.Context, segmentID int64) error {
-	if _, err := s.Store.DB.ExecContext(ctx,
-		`DELETE FROM limitation_clause WHERE segment_id = ?`, segmentID); err != nil {
-		return fmt.Errorf("clear limitations: %w", err)
-	}
-	return nil
 }

@@ -13,6 +13,16 @@ import (
 type Store struct {
 	DB     *sql.DB
 	edgeMu sync.Mutex
+	// segMu 为每个判决段维护一把独立互斥锁，使同一段的解析（限制语/要素重建）
+	// 串行执行，避免并发清空与插入交错导致条数错乱。不同段之间互不阻塞。
+	segMu sync.Map // segmentID int64 -> *sync.Mutex
+}
+
+// LockSegment 返回某判决段专属的互斥锁。同一 segmentID 始终返回同一把锁，
+// 因此同一段的解析串行化；不同段返回各自独立的锁，可并发进行。
+func (s *Store) LockSegment(segmentID int64) *sync.Mutex {
+	v, _ := s.segMu.LoadOrStore(segmentID, &sync.Mutex{})
+	return v.(*sync.Mutex)
 }
 
 // Open 打开（必要时创建）SQLite 数据库并建立全部表结构。
