@@ -21,8 +21,14 @@ func New(st *store.Store) *Service { return &Service{Store: st} }
 //   - 若裁决为"适用/确认"，要求被引方与引用方的判决段均已抽取事实要素（事实要素缺失则拒绝）；
 //   - 裁决状态回写引证关系，使图保持最新结论。
 func (s *Service) Decide(ctx context.Context, edgeID int64, status model.CitationStatus, reason string, graphVersionID int64) (*model.Decision, error) {
-	edge, _ := s.Store.GetEdge(ctx, edgeID)
-	ver, _ := s.Store.GetVersion(ctx, graphVersionID)
+	edge, err := s.Store.GetEdge(ctx, edgeID)
+	if err != nil {
+		return nil, fmt.Errorf("load citation edge: %w", err)
+	}
+	ver, err := s.Store.GetVersion(ctx, graphVersionID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: version %d", model.ErrVersionMismatch, graphVersionID)
+	}
 	if ver.Status == model.GVFrozen || ver.Status == model.GVSuperseded {
 		return nil, fmt.Errorf("%w: version %d is %s", model.ErrFrozenImmutable, graphVersionID, ver.Status)
 	}
