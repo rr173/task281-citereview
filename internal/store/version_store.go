@@ -93,3 +93,23 @@ func (s *Store) SetVersionStatus(ctx context.Context, id int64, to model.GraphVe
 	}
 	return nil
 }
+
+// FreezeVersion 将研究图版本冻结为只读，并把冻结时刻的材料快照写入 material_snapshot。
+// 快照在转入 frozen 状态的同一条 UPDATE 中定型，确保冻结版本的复核视图
+// 锁定冻结时刻的段落、要素、限制语、引证边与裁决集合；冻结后新增的引证关系
+// 不会出现在该冻结版本的图视图中。状态流转仍受 ValidGraphVersionTransition 约束。
+func (s *Store) FreezeVersion(ctx context.Context, id int64, snapshot string) error {
+	v, err := s.GetVersion(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !model.ValidGraphVersionTransition(v.Status, model.GVFrozen) {
+		return fmt.Errorf("%w: %s -> %s", model.ErrInvalidTransition, v.Status, model.GVFrozen)
+	}
+	if _, err := s.DB.ExecContext(ctx,
+		`UPDATE research_graph_version SET status = ?, material_snapshot = ? WHERE id = ?`,
+		model.GVFrozen, snapshot, id); err != nil {
+		return fmt.Errorf("freeze version: %w", err)
+	}
+	return nil
+}
