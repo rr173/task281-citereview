@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"context"
 	"net/http"
 
 	"task281-citereview/internal/model"
@@ -73,7 +72,7 @@ func (s *Server) checkScope(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	report, err := s.Svc.Scope.CheckScope(context.Background(), id)
+	report, err := s.Svc.Scope.CheckScope(r.Context(), id)
 	if err != nil {
 		writeError(w, statusForError(err), err)
 		return

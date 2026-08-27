@@ -121,25 +121,29 @@ func (s *Service) ParseLimitations(ctx context.Context, segmentID int64) ([]*mod
 //   - 否则判定"适用"。
 // 结论回写引证关系状态，并返回结构化报告。
 func (s *Service) CheckScope(ctx context.Context, edgeID int64) (*model.ScopeReport, error) {
-	time.Sleep(50 * time.Millisecond)
-	bg := context.Background()
-	edge, err := s.Store.GetEdge(bg, edgeID)
+	// 预留检查耗时：若请求已取消（如客户端断开连接），立即结束，避免在已失效的请求上继续耗时。
+	select {
+	case <-time.After(50 * time.Millisecond):
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	edge, err := s.Store.GetEdge(ctx, edgeID)
 	if err != nil {
 		return nil, err
 	}
-	cited, err := s.Store.GetSegment(bg, edge.CitedSegmentID)
+	cited, err := s.Store.GetSegment(ctx, edge.CitedSegmentID)
 	if err != nil {
 		return nil, err
 	}
-	citing, err := s.Store.GetSegment(bg, edge.CitingSegmentID)
+	citing, err := s.Store.GetSegment(ctx, edge.CitingSegmentID)
 	if err != nil {
 		return nil, err
 	}
-	citedLims, err := s.Store.ListLimitations(bg, cited.ID)
+	citedLims, err := s.Store.ListLimitations(ctx, cited.ID)
 	if err != nil {
 		return nil, err
 	}
-	citingLims, err := s.Store.ListLimitations(bg, citing.ID)
+	citingLims, err := s.Store.ListLimitations(ctx, citing.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -164,7 +168,7 @@ func (s *Service) CheckScope(ctx context.Context, edgeID int64) (*model.ScopeRep
 		status = model.CiteApplicable
 		note = "后案已采纳原案全部限制语"
 	}
-	if err := s.Store.SetEdgeStatus(bg, edge.ID, status); err != nil {
+	if err := s.Store.SetEdgeStatus(ctx, edge.ID, status); err != nil {
 		return nil, err
 	}
 	return &model.ScopeReport{
