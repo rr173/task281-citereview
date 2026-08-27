@@ -222,9 +222,8 @@ func containsAny(s string, subs []string) bool {
 }
 
 func (s *Service) clearLimitations(ctx context.Context, segmentID int64) error {
-	if _, err := s.Store.DB.ExecContext(ctx,
-		`DELETE FROM limitation_clause WHERE segment_id = ?`, segmentID); err != nil {
-		return fmt.Errorf("clear limitations: %w", err)
+	if err := s.Store.DeleteLimitationsBySegment(ctx, segmentID); err != nil {
+		return err
 	}
 	return nil
 }

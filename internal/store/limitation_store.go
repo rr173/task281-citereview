@@ -9,6 +9,8 @@ import (
 )
 
 // CreateLimitation 保存从判决段中解析出的限制语。
+// 缓存由 Store 独占维护：写入后使该判决段的限制语缓存失效，
+// 保证后续读取必从数据库重新拉取，避免重新解析后列表仍返回旧限制语。
 func (s *Store) CreateLimitation(ctx context.Context, lim *model.LimitationClause) (*model.LimitationClause, error) {
 	now := Now()
 	res, err := s.DB.ExecContext(ctx,
@@ -21,7 +23,26 @@ func (s *Store) CreateLimitation(ctx context.Context, lim *model.LimitationClaus
 	if err != nil {
 		return nil, fmt.Errorf("limitation last id: %w", err)
 	}
+	s.invalidateLimitationCache(lim.SegmentID)
 	return s.GetLimitation(ctx, id)
+}
+
+// DeleteLimitationsBySegment 删除某判决段下全部限制语，并同步使其缓存失效。
+// 这是重新解析限制语前的重置入口，确保数据库与缓存一致：清空后任何读取
+// 都会回源数据库，杜绝重新解析后仍命中陈旧缓存而返回旧限制语。
+func (s *Store) DeleteLimitationsBySegment(ctx context.Context, segmentID int64) error {
+	if _, err := s.DB.ExecContext(ctx,
+		`DELETE FROM limitation_clause WHERE segment_id = ?`, segmentID); err != nil {
+		return fmt.Errorf("delete limitations: %w", err)
+	}
+	s.invalidateLimitationCache(segmentID)
+	return nil
+}
+
+// invalidateLimitationCache 清除指定判决段的限制语缓存条目。
+// 在任何会改变该段限制语（删除/插入）的写路径之后调用，保证缓存不与数据库背离。
+func (s *Store) invalidateLimitationCache(segmentID int64) {
+	delete(s.limitationCache, segmentID)
 }
 
 // GetLimitation 按 ID 读取限制语。
