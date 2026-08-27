@@ -38,9 +38,9 @@ func (s *Store) GetLimitation(ctx context.Context, id int64) (*model.LimitationC
 	return lim, nil
 }
 
-var limitationScratch []*model.LimitationClause
-
 // ListLimitations 返回某判决段下的限制语（按 id 升序）。
+// 每次返回独立切片，不复用全局缓冲，避免连续列出多个判决段时
+// 后一次的 copy 覆盖前一次返回切片的底层数组（别名串数据）。
 func (s *Store) ListLimitations(ctx context.Context, segmentID int64) ([]*model.LimitationClause, error) {
 	rows, err := s.DB.QueryContext(ctx,
 		`SELECT id, segment_id, batch_id, ltype, text, created_at FROM limitation_clause WHERE segment_id = ? ORDER BY id ASC`, segmentID)
@@ -59,13 +59,7 @@ func (s *Store) ListLimitations(ctx context.Context, segmentID int64) ([]*model.
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if cap(limitationScratch) >= len(out) {
-		limitationScratch = limitationScratch[:len(out)]
-		copy(limitationScratch, out)
-		return limitationScratch, nil
-	}
-	limitationScratch = out
-	return limitationScratch, nil
+	return out, nil
 }
 
 // LimitationsByBatch 返回某批次下全部限制语（按 segment_id 升序）。
